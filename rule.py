@@ -21,6 +21,7 @@ class Rule:
     Z: Set[Variable]
     W : Set[Variable]
 
+
     def mutilate(self, graph : Graph, X : Set[Variable], Z : Set[Variable], W : Set[Variable]) -> Graph:
         if self.rule in ("I", "Iinv"):
             return graph.orphan(X)
