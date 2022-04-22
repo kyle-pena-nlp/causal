@@ -8,9 +8,12 @@ from structural_equation import StructuralEquation
 from graph import Graph
 from p import P
 from util import _ensure_is_frozen_set
+from expression import Expression
+
+
 
 @dataclass(frozen = True, eq = True)
-class Rule(ABC):
+class StatementRule(ABC):
 
     @abstractmethod
     def mutilate(self, graph : Graph) -> Graph:
@@ -25,11 +28,14 @@ class Rule(ABC):
         pass
 
     @abstractclassmethod
-    def bindings(cls, statement : P, graph : P) -> Iterable['Rule']:
+    def bindings(cls, statement : P, graph : Graph) -> Iterable['StatementRule']:
         pass
 
+
+
+
 @dataclass(frozen = True, eq = True)
-class RuleI:
+class RuleI(StatementRule):
 
     Y : FrozenSet[Variable]
     doX : FrozenSet[Variable]
@@ -56,7 +62,7 @@ class RuleI:
         return P(Y = statement.Y, do = statement.do, Z = statement.Z - self.Z)
 
     @classmethod
-    def bindings(cls, statement : P, graph : Graph) -> Iterable[Rule]:
+    def bindings(cls, statement : P, graph : Graph) -> Iterable[StatementRule]:
         for z in statement.Z:
             Z_ = { z }
             W_ = statement.Z - Z_
@@ -67,7 +73,7 @@ class RuleI:
         return "Rule I"
 
 @dataclass(frozen = True, eq = True)
-class RuleII:
+class RuleII(StatementRule):
 
     Y : FrozenSet[Variable]
     doX : FrozenSet[Variable]
@@ -96,7 +102,7 @@ class RuleII:
         return P(Y = statement.Y, do = statement.do - self.doZ, Z = statement.Z | self.doZ)
 
     @classmethod
-    def bindings(cls, statement : P, graph : Graph) -> Iterable[Rule]:
+    def bindings(cls, statement : P, graph : Graph) -> Iterable[StatementRule]:
         for doZ in statement.do:
             doZ_ = { doZ }
             W_ = statement.Z
@@ -107,7 +113,7 @@ class RuleII:
         return "Rule II"
 
 @dataclass(frozen = True, eq = True)
-class RuleIII:
+class RuleIII(StatementRule):
 
     Y : FrozenSet[Variable]
     doX : FrozenSet[Variable]
@@ -137,7 +143,7 @@ class RuleIII:
         return P(Y = statement.Y, do = statement.do - self.doZ, Z = statement.Z)
 
     @classmethod
-    def bindings(cls, statement : P, graph : Graph) -> Iterable[Rule]:
+    def bindings(cls, statement : P, graph : Graph) -> Iterable[StatementRule]:
         for doZ in statement.do:
             doZ_ = { doZ }
             W_ = statement.Z

@@ -1,10 +1,13 @@
 from dataclasses import dataclass
-from typing import FrozenSet, Union, Tuple, Dict, Union, Iterable
+from typing import FrozenSet, Union, Tuple, Dict, Union, Iterable, List
 from collections import Counter, defaultdict
+import re
 from variable import Variable
+from p import P
+from product import Product
 from structural_equation import StructuralEquation
 from util import _ensure_is_frozen_set, _parsed_frozenset, ParseableAsVariableFrozenSet
-import re
+
 
 @dataclass(frozen = True, eq = True)
 class Graph:
@@ -92,7 +95,6 @@ class Graph:
                     queue.append(child)
         return False
 
-
     def validate(self):
         # TODO: check for at most 1 equation per variable
         # TODO: check for acylicity
@@ -110,6 +112,21 @@ class Graph:
             return False,err
 
         return True,None
+
+    def joint_distribution(self):
+        terms = set()
+        for variable in self.variables:
+            parents = self.parents({ variable })
+            term = P(Y = frozenset({variable}), do = frozenset({}), Z = parents)
+            terms.add(term)
+        return Product(frozenset(terms))
+
+    def conditional_distribution(self, Z: FrozenSet[Variable]):
+        joint_distribution = self.joint_distribution()
+        denominator_terms = { P(Y = z, do = frozenset({}), Z = frozenset({})) for z in Z }
+        eliminated_terms = joint_distribution.terms & denominator_terms
+        raise Exception("ConditionalProbability class?")
+        #return ConditionalProbability(numerator = joint_distribution.terms - eliminated_terms, denominator = denominator_terms - eliminated_terms)
 
     def conditionally_independent(self, Y : ParseableAsVariableFrozenSet, Z : ParseableAsVariableFrozenSet, W: Union[None,ParseableAsVariableFrozenSet]):
         if W is None:
@@ -135,7 +152,7 @@ class Graph:
             self._reachable_from_rec(x, W, [ x ], [ None ], reachable)
         return reachable
 
-    def _reachable_from_rec(self, x : Variable, W: FrozenSet[Variable], path : list, path_arrows : list, reachable : set()):
+    def _reachable_from_rec(self, x : Variable, W: FrozenSet[Variable], path : List[Variable], path_arrows : List[str], reachable : set()):
         
         for p in self.parents({ x }):
             
@@ -147,8 +164,8 @@ class Graph:
             last_arrow = path_arrows[-1]
             last_variable = path[-1]
             arrows = (last_arrow,this_arrow)
-            blocked = last_variable in W
-            
+            blocked = last_variable in W or (self.descendants({ last_variable }) & W)
+
             if not Graph._d_separated_triple(arrows,blocked):
                 reachable.add(p)
                 self._reachable_from_rec(p, W, path + [p], path_arrows + [this_arrow], reachable)
@@ -163,7 +180,7 @@ class Graph:
             last_arrow = path_arrows[-1]
             last_variable = path[-1]            
             arrows = (last_arrow,this_arrow)
-            blocked = last_variable in W
+            blocked = last_variable in W or (self.descendants({ last_variable }) & W)
 
             if not Graph._d_separated_triple(arrows,blocked):
                 reachable.add(c)
@@ -210,13 +227,12 @@ class Graph:
     # GRAPH MUTILATION OPERATION
     def bereave(self, X : FrozenSet[Variable]) -> 'Graph':
         # Remove arrows pointing out of X(s)
-        truncated_structural_equations = set()
+        modified_structural_equations = set()
         for structural_equation in self.structural_equations:
             if structural_equation.X & X:
-                structural_equation = structural_equation
-            else:
-                truncated_structural_equations.add(structural_equation)
-        return Graph(self.variables, truncated_structural_equations)
+                structural_equation = StructuralEquation(X = structural_equation.X - X, Y = structural_equation.Y)
+            modified_structural_equations.add(structural_equation)
+        return Graph(self.variables, modified_structural_equations)
 
     # GRAPH RELATIONSHIP OPERATION
     def ancestors(self, X : FrozenSet[Variable]) -> FrozenSet[Variable]:
@@ -240,7 +256,7 @@ class Graph:
                 if eq.Y == x:
                     for x_ in eq.X:
                         parents.add(x_)
-        return parents
+        return frozenset(parents)
 
     # GRAPH RELATIONSHIP OPERATION
     def children(self, X : FrozenSet[Variable]) -> FrozenSet[Variable]:
@@ -249,7 +265,7 @@ class Graph:
             for eq in self.structural_equations:
                 if x in eq.X:
                     children.add(eq.Y)
-        return children
+        return frozenset(children)
 
     # GRAPH RELATIONSHIP OPERATION
     def descendants(self, X : FrozenSet[Variable]) -> FrozenSet[Variable]:

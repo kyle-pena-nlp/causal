@@ -1,5 +1,5 @@
 from variable import Variable
-from typing import Union, Iterable
+from typing import Union, Iterable, Any
 
 ParseableAsVariableFrozenSet = Union[str,Variable,Iterable[Union[str,Variable]]]
 
@@ -16,7 +16,7 @@ def _parsed(x : str, cls : type):
         return x
     return getattr(cls,"parse")(x)
 
-def _parsed_frozenset(x : Union[str,Variable,Iterable[Union[str,Variable]]], cls, sep = ","):
+def _parsed_frozenset(x : Union[str,Any,Iterable[Union[str,Any]]], cls, sep = ","):
     if isinstance(x, str) and x.strip() == "":
         return frozenset()
     if isinstance(x, str) and sep not in x:

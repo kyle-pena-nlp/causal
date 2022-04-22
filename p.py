@@ -1,12 +1,12 @@
 from dataclasses import dataclass
-from typing import FrozenSet, Union, Tuple, Dict
-from collections import Counter
-from variable import Variable
-from util import _ensure_is_frozen_set
+from typing import FrozenSet
 import re
+from variable import Variable
+from expression import Expression
+from util import _parsed
 
 @dataclass(frozen = True, eq = True)
-class P:
+class P(Expression):
     # outcomes
     Y : FrozenSet[Variable]
     # interventions
@@ -14,13 +14,13 @@ class P:
     # conditioning set
     Z : FrozenSet[Variable]
 
-    #def __post_init__(self):
-    #    self.Y = _ensure_is_frozen_set(self.Y)
-    #    self.do = _ensure_is_frozen_set(self.do)
-    #    self.Z = _ensure_is_frozen_set(self.Z)
+
 
     @staticmethod
     def parse(p : str):
+
+        # TODO: a real parser.
+
         Y = set()
         do = set()
         Z = set()
@@ -57,6 +57,9 @@ class P:
         Z  = [ Variable(z) for z in Z ]
 
         return P(Y = frozenset(Y), do = frozenset(do), Z = frozenset(Z))
+
+    def hat_free(self):
+        return len(self.do) == 0
 
     def __str__(self):
         ys  = ",".join(sorted(map(str,self.Y)))
