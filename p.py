@@ -1,34 +1,37 @@
 import inspect
 from dataclasses import dataclass, fields, field, Field, is_dataclass
-from enum import Enum
+from argparse import ArgumentParser
 from typing import FrozenSet, Any, get_origin, get_args, List, Set, Union
 from collections import defaultdict
 import re
 from abc import ABC, abstractclassmethod, abstractmethod, abstractstaticmethod
 from dataclasses import dataclass
+from winreg import REG_BINARY
+from xml.dom import registerDOMImplementation
 import tatsu
 
 TATSU_GRAMMAR = """
 start = EXPRESSION ;
-EXPRESSION = expression:( QUOTIENT | PRODUCT | P | MARGINALIZATION ) ;
-QUOTIENT = quotient:( NUMERATOR '/' DENOMINATOR ) ;
+WS = /\s*/ ;
+EXPRESSION = ( QUOTIENT | PRODUCT | P | MARGINALIZATION ) ;
+QUOTIENT = quotient:( WS NUMERATOR WS '/' WS DENOMINATOR WS ) ;
 NUMERATOR = numerator:EXPRESSION ;
 DENOMINATOR = denominator:EXPRESSION ;
 PRODUCT = product:( TERMS ) ;
-TERMS = terms:((EXPRESSION '*' EXPRESSION) { '*' EXPRESSION }* ) ;
-MARGINALIZATION = marginalization:( 'E[' MARGINALIZATION_EXPRESSION ';' MARGINALIZATION_MARGINS ']' ) ;
+TERMS = terms:((EXPRESSION WS '*' WS EXPRESSION) { '*' WS EXPRESSION }* ) ;
+MARGINALIZATION = marginalization:( 'E[' WS MARGINALIZATION_EXPRESSION WS ';' WS MARGINALIZATION_MARGINS WS ']' ) ;
 MARGINALIZATION_EXPRESSION = expression:EXPRESSION ;
 MARGINALIZATION_MARGINS = margins:VARIABLE_LIST ;
-VARIABLE_LIST = ( VARIABLE { ',' VARIABLE }* );
+VARIABLE_LIST = ( VARIABLE { ',' WS VARIABLE }* );
 VARIABLE = variable:( NAME ) ;
 NAME = name:/[A-Z]+/ ;
-P = p:( 'P(' P_INNER ')' );
+P = p:( 'P(' WS P_INNER WS ')' );
 P_INNER = (Y_RULE '|' DO_RULE ',' Z_RULE) |
           (Y_RULE '|' Z_RULE ) |
           (Y_RULE '|' DO_RULE ) |
           (Y_RULE);
-DO_ITEM = 'do(' VARIABLE ')' ;
-DO_LIST = DO_ITEM { ',' DO_ITEM }* ;          
+DO_ITEM = 'do(' WS VARIABLE WS ')' ;
+DO_LIST = DO_ITEM { ',' WS DO_ITEM }* ;          
 Y_RULE = Y:VARIABLE_LIST ;
 DO_RULE = do:DO_LIST ;
 Z_RULE = Z:VARIABLE_LIST ;
@@ -37,7 +40,8 @@ MODEL = tatsu.compile(TATSU_GRAMMAR)
 TAG_2_KLASS = {}
 KLASS_2_TAG = {}
 KLASS_2_TAGS = defaultdict(lambda: set())
-REGISTERED_KLASSES = set()
+# parsing order will register from most abstract to least abstract
+REGISTERED_KLASSES = []
 
 def grammar_register_tag(tag):
     def decorator(klass):
@@ -48,7 +52,7 @@ def grammar_register_tag(tag):
         for k in inspect.getmro(klass)[1:]:
             if k in REGISTERED_KLASSES:
                 KLASS_2_TAGS[k].add(tag)
-        REGISTERED_KLASSES.add(klass)
+        REGISTERED_KLASSES.append(klass)
         return klass
     return decorator
 
@@ -63,8 +67,10 @@ class Parseable(ABC):
         """
             Take a string and turn it into an instance of cls
         """
+        # TODO: if abstract, get all tags of non-abstract child classes
         start_tag = KLASS_2_TAG[cls]
-        AST = MODEL.parse(string) # start = start_tag
+        AST = MODEL.parse(string)
+        # TODO: other types
         AST = dict(AST)
         tags = KLASS_2_TAGS[cls]
         tag, ast_ = Parseable._find_first_value_of_tag(tags, AST)
@@ -74,10 +80,36 @@ class Parseable(ABC):
 
     @staticmethod
     def parse_instance(klass, AST):
-        if is_dataclass(klass):
+        if is_dataclass(klass) and inspect.isabstract(klass):
+            return Parseable._parse_abstract_class(klass, AST)
+        elif is_dataclass(klass):
             return Parseable.parse_dataclass_instance(klass, AST)
         else:
             return klass(AST)
+
+    @staticmethod
+    def _parse_abstract_class(klass, AST):
+        # ordered from most derived to least derived (note the ::-1)
+        subklasses = [ subklass for subklass in REGISTERED_KLASSES if issubclass(subklass, klass) and not inspect.isabstract(subklass) ][::-1]
+        subklass_tags = [ KLASS_2_TAG[subklass] for subklass in subklasses ]
+        if isinstance(AST, dict):
+            for tag,ast_ in AST.items():
+                if tag in subklass_tags:
+                    subklass = TAG_2_KLASS[tag]
+                    return Parseable.parse_instance(subklass, ast_)
+                else:
+                    result = Parseable._parse_abstract_class(klass, ast_)
+                    if result is not None:
+                        return result
+        elif isinstance(AST, (list,tuple)):
+            for ast_ in AST:
+                result = Parseable._parse_abstract_class(klass, ast_)
+                if result is not None:
+                    return result
+        elif isinstance(AST, str):
+            pass
+        else:
+            raise Exception("Unknown AST type {}".format(AST))
 
     @staticmethod
     def parse_dataclass_instance(klass, AST):
@@ -312,20 +344,15 @@ class Marginalization(Expression):
     expression : Expression
     margins: FrozenSet[Variable]
 
-    @classmethod
-    def _parse_AST(cls, AST):
-        _,expression = Parseable._find_first_value_of_tag("expression")
-        _,margins  = Parseable._find_first_value_of_tag("margins")
-        margins = frozenset(Parseable._parse_parseables(margins))
-        return Marginalization(expression = expression, margins = margins)
-
     def __str__(self):
-        margins = ", ".join(sorted(map(str,self.X)))
-        return "E[{};{}]".format(str(self.statement), margins)
+        margins = ",".join(sorted(map(str,self.margins)))
+        return "E[{};{}]".format(str(self.expression), margins)
 
     def hat_free(self):
         return self.expression.hat_free()
 
-
 if __name__ == "__main__":
-    print(P.parse("P(X,Y,Z|do(M),do(N),do(O))"))
+    parser = ArgumentParser()
+    parser.add_argument("--expression", type = str, required = False, default = "E[P(X,Y);Y]")
+    args = parser.parse_args()
+    print(Expression.parse(args.expression))
