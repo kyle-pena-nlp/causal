@@ -7,7 +7,7 @@ from variable import Variable
 from structural_equation import StructuralEquation
 from graph import Graph
 from p import P
-from util import _ensure_is_frozen_set
+from util import _ensure_is_frozen_set, _parsed_frozenset
 from expression import Expression
 
 
@@ -32,7 +32,19 @@ class StatementRule(ABC):
         pass
 
 
+@dataclass(frozen = True, eq = True)
+class BayesRule(StatementRule):
 
+    Z : FrozenSet[Variable]
+
+    def apply(self, statement : P):
+        joint = P(Y = statement.Y | self.Z, do = statement.do, Z = statement.Z - self.Z) 
+        conditional = P(Y = statement.Z, do = frozenset(), Z = frozenset())
+        return Quotient(Product(frozenset({ joint })), Product(frozenset({ conditional })))
+
+    @abstractclassmethod
+    def bindings(cls, statement : P, graph : Graph) -> Iterable['StatementRule']:
+        pass
 
 @dataclass(frozen = True, eq = True)
 class RuleI(StatementRule):

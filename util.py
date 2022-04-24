@@ -1,4 +1,3 @@
-from variable import Variable
 from typing import Union, Iterable, Any
 
 ParseableAsVariableFrozenSet = Union[str,Variable,Iterable[Union[str,Variable]]]

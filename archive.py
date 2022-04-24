@@ -115,3 +115,76 @@ def _identifiable_expression(expression : Expression, graph : Graph):
             
         
         return reachable
+
+
+
+
+
+
+    @staticmethod
+    def parse(p : str):
+
+        # TODO: a real parser.
+
+        Y = set()
+        do = set()
+        Z = set()
+
+        m = re.match("P\((.*)\)", p)
+        if m:
+            p = m.group(1)
+        p = p.strip()
+        if p == "":
+            raise Exception("Must be non-empty")
+        if "|" in p:
+            p = p.split("|")
+            for x in p[0].split(","):
+                x = x.strip()
+                Y.add(x)
+            for x in p[1].split(","):
+                x = x.strip()
+                m = re.match("do\((.*)\)", x)
+                if m:
+                    x = m.group(1).strip()
+                    do.add(x)
+                else:
+                    Z.add(x)
+        else:
+            for x in p.split(","):
+                x = x.strip()
+                Y.add(x)
+
+        if len(Y) == 0:
+            raise Exception("Must contain at least one variable on LHS of conditional")
+
+        Y  = [ Variable(y) for y in Y ]
+        do = [ Variable(d) for d in do ]
+        Z  = [ Variable(z) for z in Z ]
+
+        return P(Y = frozenset(Y), do = frozenset(do), Z = frozenset(Z))
+
+
+
+    @staticmethod
+    def parse(string : str):
+        expressions = []
+        tokens = string.split("*")
+        for token in tokens:
+            token = token.strip()
+            if token.startswith("E["):
+                expressions.add(Marginalization.parse(token))
+            else:
+                expressions.add(P.parse(token))
+        return Product(frozenset(expressions))
+
+
+    @staticmethod 
+    def parse(string : str):
+        m = re.match(r"E\[([^;]*);([^]]*)\]",string)
+        if not m:
+            raise Exception("Doesn't look like a marginalization: {}".format(string))
+        p = m.group(1)
+        p = P.parse(p)
+        X = m.group(2)
+        X = _parsed_frozenset(X, Variable)
+        return Marginalization(X = X, statement = p)
