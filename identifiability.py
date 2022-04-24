@@ -4,21 +4,17 @@ from collections import Counter
 from itertools import chain, combinations
 
 
-from variable import Variable
+from p import Variable, Expression, Product, Marginalization, P
 from structural_equation import StructuralEquation
 from graph import Graph
 from derivation import Derivation
-from expression import Expression
-from p import P
-from product import Product
-from marginalization import Marginalization
 from rule import RuleI, RuleII, RuleIII
 from util import _parsed
 
 from argparse import ArgumentParser
 
 def statement_identifiable(statement : Union[str,P], graph : Union[Graph,str]) -> Derivation:
-    statement = _parsed(statement,P)
+    statement = P.parse(statement) if isinstance(statement,str) else statement
     graph     = _parsed(graph,Graph)
     _assert_statement_compatible_with_graph(statement, graph)
     return _statement_identifiable_BFS(statement, graph)

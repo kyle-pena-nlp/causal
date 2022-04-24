@@ -2,9 +2,8 @@ from dataclasses import dataclass
 from typing import FrozenSet, Union, Tuple, Dict, Union, Iterable, List
 from collections import Counter, defaultdict
 import re
-from variable import Variable
+from p import P, Variable, Product
 from p import P
-from product import Product
 from structural_equation import StructuralEquation
 from util import _ensure_is_frozen_set, _parsed_frozenset, ParseableAsVariableFrozenSet
 
