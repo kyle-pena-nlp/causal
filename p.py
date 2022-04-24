@@ -14,7 +14,7 @@ TATSU_GRAMMAR = """
 start = EXPRESSION ;
 WS = /\s*/ ;
 EXPRESSION = ( QUOTIENT | PRODUCT | P | MARGINALIZATION ) ;
-QUOTIENT = quotient:( WS NUMERATOR WS '/' WS DENOMINATOR WS ) ;
+QUOTIENT = quotient:(( '(' WS NUMERATOR WS '/' WS DENOMINATOR WS ')' ) | ( WS NUMERATOR WS '/' WS DENOMINATOR WS )) ;
 NUMERATOR = numerator:EXPRESSION ;
 DENOMINATOR = denominator:EXPRESSION ;
 PRODUCT = product:( TERMS ) ;
@@ -40,8 +40,7 @@ MODEL = tatsu.compile(TATSU_GRAMMAR)
 TAG_2_KLASS = {}
 KLASS_2_TAG = {}
 KLASS_2_TAGS = defaultdict(lambda: set())
-# parsing order will register from most abstract to least abstract
-REGISTERED_KLASSES = []
+REGISTERED_KLASSES = [] # parsing order will register from most abstract to least abstract
 
 def grammar_register_tag(tag):
     def decorator(klass):
