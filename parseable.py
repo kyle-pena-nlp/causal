@@ -12,9 +12,7 @@ import tatsu
 # and for collection fields:
 #  @collection_parsing(sep=",")
 
-EBNF_GRAMMAR = """
-start = EXPRESSION ;
-WS = /\s*/ ;
+EBNF_GRAMMAR = """WS = /\s*/ ;
 EXPRESSION = expression: ( QUOTIENT | PRODUCT | P | MARGINALIZATION ) ;
 QUOTIENT = quotient:(( '(' WS NUMERATOR WS '/' WS DENOMINATOR WS ')' ) | ( WS NUMERATOR WS '/' WS DENOMINATOR WS )) ;
 NUMERATOR = numerator:EXPRESSION ;
@@ -38,8 +36,7 @@ Y_RULE = Y:VARIABLE_LIST ;
 DO_RULE = do:DO_LIST ;
 Z_RULE = Z:VARIABLE_LIST ;
 """
-MODEL = tatsu.compile(EBNF_GRAMMAR)
-
+MODELS = {}
 TAG_2_KLASS = {}
 KLASS_2_TAG = {}
 KLASS_2_TAGS = defaultdict(lambda: set())
@@ -63,14 +60,47 @@ class Parseable(ABC):
         A thing you can parse from a string
     """
 
+    MODELS = {}
+
+    @staticmethod
+    def get_model(tatsu_ebnf : str):
+        if tatsu_ebnf not in MODELS:
+            MODELS[tatsu_ebnf] = tatsu.compile(tatsu_ebnf)
+        return MODELS[tatsu_ebnf]
+
     @classmethod
     def parse(cls, string : str):
         """
             Take a string and turn it into an instance of cls
         """
-        AST = MODEL.parse(string)
+        start_statement = "start = EXPRESSION ;"
+        grammar = "\n".join([ start_statement, EBNF_GRAMMAR ])
+        try:
+            AST = Parseable.get_model(grammar).parse(string)
+        except:
+            print(grammar)
+            print(string)
+            raise
         instance = Parseable.parse_instance(cls, AST)
         return instance
+
+    # TODO: properly handle left recursion  with list of expression
+    @staticmethod
+    def parse_list(klass, string : str):
+        tag = KLASS_2_TAG[klass]
+        start_statement = "start = LIST_ROOT ;".format(tag)
+        # Making a strong assumption here that the production rule for the type is the tag name uppercased
+        rule = "LIST_ROOT = {}_list:( ( {} {{ ',' WS {} }}* ) | WS ) ;".format(tag, tag.upper(), tag.upper())
+        grammar = "\n".join([ start_statement, rule, EBNF_GRAMMAR ])
+        try:
+            AST = Parseable.get_model(grammar).parse(string)
+        except:
+            print(grammar)
+            print(string)
+            raise
+        results = []
+        Parseable._parse_instances(klass, AST, results)
+        return results
 
     @staticmethod
     def parse_instance(klass, AST):

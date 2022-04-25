@@ -44,8 +44,7 @@ class Variable(Parseable):
         return self.name == other.name
 
     def __str__(self):
-        return self.name    
-    
+        return self.name
 
 @grammar_register_tag("p")
 @dataclass(frozen = True, eq = True)
@@ -125,6 +124,6 @@ class Marginalization(Expression):
 
 if __name__ == "__main__":
     parser = ArgumentParser()
-    parser.add_argument("--expression", type = str, required = False, default = "E[P(X,Y);Y]")
+    parser.add_argument("--expression", type = str, required = False, default = "P(X,Y)")
     args = parser.parse_args()
-    print(Expression.parse(args.expression))
+    print(Parseable.parse_list(P, args.expression))

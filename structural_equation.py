@@ -1,8 +1,7 @@
 from dataclasses import dataclass
 from typing import FrozenSet, Union, Tuple, Dict
 from collections import Counter
-from variable import Variable
-from util import _ensure_is_frozen_set
+from p import Variable
 
 @dataclass(frozen = True, eq = True)
 class StructuralEquation:

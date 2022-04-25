@@ -1,11 +1,11 @@
-from dataclasses import dataclass
-from typing import FrozenSet, Union, Tuple, Dict, Union, Iterable, List
+from dataclasses import dataclass, field
+from typing import FrozenSet, Union, Tuple, Dict, Union, Iterable, List, Optional
 from collections import Counter, defaultdict
 import re
 from p import P, Variable, Product, Quotient
 from p import P
 from structural_equation import StructuralEquation
-from util import _ensure_is_frozen_set, _parsed_frozenset, ParseableAsVariableFrozenSet
+from util import maybe_parse, maybe_parse_frozenset
 
 
 @dataclass(frozen = True, eq = True)
@@ -14,7 +14,7 @@ class Graph:
     variables : FrozenSet[Variable]
 
     # name of Y => eq :: Y = f(X1,X2,...)
-    structural_equations : FrozenSet[StructuralEquation] 
+    structural_equations : FrozenSet[StructuralEquation]
 
     #def __post_init__(self):
     #    self.variables = _ensure_is_frozen_set(self.variables)
@@ -138,18 +138,19 @@ class Graph:
         raise Exception("ConditionalProbability class?")
         #return ConditionalProbability(numerator = joint_distribution.terms - eliminated_terms, denominator = denominator_terms - eliminated_terms)
 
-    def conditionally_independent(self, Y : ParseableAsVariableFrozenSet, Z : ParseableAsVariableFrozenSet, W: Union[None,ParseableAsVariableFrozenSet]):
+    def conditionally_independent(self, Y , Z, W = None):
+        
         if W is None:
             W = frozenset()
-        return self._conditionally_independent(_parsed_frozenset(Y,Variable), _parsed_frozenset(Z,Variable), _parsed_frozenset(W,Variable))
+        return self._conditionally_independent(maybe_parse_frozenset(Variable,Y), maybe_parse_frozenset(Variable,Z), maybe_parse_frozenset(Variable,W))
 
     def _conditionally_independent(self, Y : FrozenSet[Variable], Z : FrozenSet[Variable], W : FrozenSet[Variable] = None):
         return not (Z & self._reachable_from(Y, W))
     
-    def reachable_from(self, X : ParseableAsVariableFrozenSet, W : Union[None,ParseableAsVariableFrozenSet] = None):
+    def reachable_from(self, X, W = None):
         if W is None:
             W = frozenset()
-        return self._reachable_from(_parsed_frozenset(X,Variable), _parsed_frozenset(W,Variable))
+        return self._reachable_from(maybe_parse_frozenset(Variable,X), maybe_parse_frozenset(Variable,W))
 
     def _reachable_from(self, X : FrozenSet[Variable], W : FrozenSet[Variable]):
 
@@ -196,7 +197,88 @@ class Graph:
                 reachable.add(c)
                 self._reachable_from_rec(c, W, path + [c], path_arrows + [this_arrow], reachable)
                 
+    def paths(self, X : Variable, Y: Variable, search_directions = ('->','<-')):
+        """
+            Generate all paths from X to Y, irrespective of blocking, direction, etc.
+        """
+        paths, arrow_paths = [], []
+        path_so_far, path_arrows_so_far = [X], [None]        
 
+        self._paths_rec(Y, path_so_far, path_arrows_so_far, paths, arrow_paths, search_directions)
+        return paths, arrow_paths
+
+    def _paths_rec(self, 
+            Y : Variable, 
+            path_so_far : List[Variable], path_arrows_so_far : List[str], 
+            paths : List[Tuple[Variable]], arrow_paths: List[Tuple[str]],
+            search_directions) -> \
+        Tuple[List[Tuple[Variable]],List[Tuple[Optional[str]]]]:
+        
+        tip = path_so_far[-1]
+        
+        if '<-' in search_directions:
+            for x in self.parents(frozenset({ tip })):
+                if x in path_so_far:
+                    continue
+                elif x == Y:
+                    paths.append(tuple(path_so_far + [Y]))
+                    arrow_paths.append(tuple(path_arrows_so_far + ['<-']))
+                else:
+                    self._paths_rec(Y, path_so_far + [x], path_arrows_so_far + ['<-'], paths, arrow_paths, search_directions)
+        
+        if '->' in search_directions:
+            for x in self.children(frozenset({ tip })):
+                if x in path_so_far:
+                    continue
+                elif x == Y:
+                    paths.append(tuple(path_so_far + [Y]))
+                    arrow_paths.append(tuple(path_arrows_so_far + ['->']))
+                else:
+                    self._paths_rec(Y, path_so_far + [x], path_arrows_so_far + ['->'], paths, arrow_paths, search_directions)
+
+    def backdoor_paths(self, X : Variable, Y: Variable) -> FrozenSet[Tuple[Variable]]:
+        """
+            Generate all backdoor paths from X to Y, irrespective of blocking, direction, etc.
+        """
+        paths, arrow_paths = [], []
+        path_so_far, path_arrows_so_far = [X], [None]  
+
+        for x in self.parents(frozenset({ X })):
+            if x in path_so_far:
+                continue
+            elif x == Y:
+                paths.append(tuple(path_so_far + [Y]))
+                arrow_paths.append(tuple(path_arrows_so_far + ['<-']))
+            else:
+                self._paths_rec(Y, path_so_far + [x], path_arrows_so_far + ['<-'], paths, arrow_paths, ('<-','->'))
+
+        return list(zip(paths, arrow_paths))
+
+    def causal_paths(self, X : Variable, Y : Variable):
+        """
+            Generate all causal paths from X to Y, irrespective of blocking, direction, etc.
+        """
+        return self.paths(X, Y, '->')
+
+    def path_is_blocked(self, path : Tuple[Variable], path_arrows : Tuple[Optional[str]], blockers : FrozenSet[Variable]):
+        last_variable,last_arrow = None,None
+        for variable,arrow in zip(path,path_arrows):
+            if last_variable is not None:
+                variable_blocked = last_variable in blockers
+                d_separated_triple = Graph._d_separated_triple((last_arrow,arrow), variable_blocked)
+                if d_separated_triple:
+                    return True
+            last_variable,last_arrow = variable,arrow
+        return False
+
+    def path_blockers(self, path):
+        path_blockers = set()
+        path_variables,path_arrows = path
+        # TODO: exclude start and end
+        for variable in path_variables:
+            if self.path_is_blocked(path_variables, path_arrows, frozenset({ variable })):
+                path_blockers.add(variable)
+        return path_blockers
         
     @staticmethod
     def _d_separated_triple(arrows : Tuple[Union[str,None],str], blocked : bool):
@@ -276,6 +358,10 @@ class Graph:
                 if x in eq.X:
                     children.add(eq.Y)
         return frozenset(children)
+
+    def neighbors(self, X : FrozenSet[Variable]) -> FrozenSet[Variable]:
+        # No spouses, even though that abuses the metaphor a bit
+        return self.parents(X) | self.children(X)
 
     # GRAPH RELATIONSHIP OPERATION
     def descendants(self, X : FrozenSet[Variable]) -> FrozenSet[Variable]:
