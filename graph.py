@@ -2,7 +2,7 @@ from dataclasses import dataclass
 from typing import FrozenSet, Union, Tuple, Dict, Union, Iterable, List
 from collections import Counter, defaultdict
 import re
-from p import P, Variable, Product
+from p import P, Variable, Product, Quotient
 from p import P
 from structural_equation import StructuralEquation
 from util import _ensure_is_frozen_set, _parsed_frozenset, ParseableAsVariableFrozenSet
@@ -20,6 +20,7 @@ class Graph:
     #    self.variables = _ensure_is_frozen_set(self.variables)
     #    self.structural_equations = _ensure_is_frozen_set(self.structural_equations)
 
+    # TODO: replace with EBNF based parser
     @staticmethod
     def parse(g : str):
 
@@ -58,6 +59,9 @@ class Graph:
             raise Exception(err)
     
     def _all_variables_declared(self):
+        """
+            Validation: No variables appear in graph that are undeclared
+        """
         for structural_equation in self.structural_equations:
             for variable in structural_equation.X:
                 if variable not in self.variables:
@@ -67,6 +71,9 @@ class Graph:
         return True,None
 
     def _unique_outcomes(self):
+        """
+            Validation: A variable appears as an outcome in at most one structural equation 
+        """
         counter = Counter([ eq.Y for eq in self.structural_equations ])
         for (variable,count) in counter.most_common():
             if count <= 1:
@@ -76,6 +83,9 @@ class Graph:
         return True,None
 
     def _acyclic(self):
+        """
+            Validation: There are no cycles implied by the structural equations
+        """
         for variable in self.variables:
             if self._has_cycle(variable):
                 return False, "'{}' appears in a cycle".format(variable)
@@ -95,8 +105,9 @@ class Graph:
         return False
 
     def validate(self):
-        # TODO: check for at most 1 equation per variable
-        # TODO: check for acylicity
+        """
+            Make sure graph implied by structural equations meets assumptions
+        """
 
         valid,err = self._unique_outcomes()
         if not valid:

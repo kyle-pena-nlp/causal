@@ -3,12 +3,10 @@ from abc import ABC, abstractmethod, abstractclassmethod
 from dataclasses import dataclass
 from typing import FrozenSet, Union, Tuple, Dict, Iterable
 from collections import Counter
-from variable import Variable
 from structural_equation import StructuralEquation
 from graph import Graph
 from p import P
-from util import _ensure_is_frozen_set, _parsed_frozenset
-from expression import Expression
+from p import Variable, P, Quotient, Product, Marginalization
 
 
 
