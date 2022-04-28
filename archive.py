@@ -188,3 +188,101 @@ def _identifiable_expression(expression : Expression, graph : Graph):
         X = m.group(2)
         X = _parsed_frozenset(X, Variable)
         return Marginalization(X = X, statement = p)
+
+
+    def paths(self, X : Variable, Y: Variable, search_directions = ('->','<-')):
+        """
+            Generate all paths from X to Y, irrespective of blocking, direction, etc.
+        """
+        paths, arrow_paths = [], []
+        path_so_far, path_arrows_so_far = [X], [None]        
+
+        self._paths_rec(Y, path_so_far, path_arrows_so_far, paths, arrow_paths, search_directions)
+        return paths, arrow_paths
+
+    def _paths_rec(self, 
+            Y : Variable, 
+            path_so_far : List[Variable], path_arrows_so_far : List[str], 
+            paths : List[Tuple[Variable]], arrow_paths: List[Tuple[str]],
+            search_directions) -> \
+        Tuple[List[Tuple[Variable]],List[Tuple[Optional[str]]]]:
+        
+        tip = path_so_far[-1]
+        
+        if '<-' in search_directions:
+            for x in self.parents(frozenset({ tip })):
+                if x in path_so_far:
+                    continue
+                elif x == Y:
+                    paths.append(tuple(path_so_far + [Y]))
+                    arrow_paths.append(tuple(path_arrows_so_far + ['<-']))
+                else:
+                    self._paths_rec(Y, path_so_far + [x], path_arrows_so_far + ['<-'], paths, arrow_paths, search_directions)
+        
+        if '->' in search_directions:
+            for x in self.children(frozenset({ tip })):
+                if x in path_so_far:
+                    continue
+                elif x == Y:
+                    paths.append(tuple(path_so_far + [Y]))
+                    arrow_paths.append(tuple(path_arrows_so_far + ['->']))
+                else:
+                    self._paths_rec(Y, path_so_far + [x], path_arrows_so_far + ['->'], paths, arrow_paths, search_directions)
+
+    def backdoor_paths(self, X : Variable, Y: Variable) -> Iterable[Path]:
+        """
+            Generate all backdoor paths from X to Y, irrespective of blocking, direction, etc.
+        """
+        paths, arrow_paths = [], []
+        path_so_far, path_arrows_so_far = [X], [None]  
+
+        for x in self.parents(frozenset({ X })):
+            if x in path_so_far:
+                continue
+            elif x == Y:
+                paths.append(tuple(path_so_far + [Y]))
+                arrow_paths.append(tuple(path_arrows_so_far + ['<-']))
+            else:
+                self._paths_rec(Y, path_so_far + [x], path_arrows_so_far + ['<-'], paths, arrow_paths, ('<-','->'))
+
+        return list(zip(paths, arrow_paths))
+
+    def causal_paths(self, X : Variable, Y : Variable):
+        """
+            Generate all causal paths from X to Y, irrespective of blocking, direction, etc.
+        """
+        return self.paths(X, Y, '->')
+
+
+    def _grow_paths(self, 
+        destination_set : FrozenSet[Variable], 
+        paths : Set[Path], 
+        completed_paths = Set[Path],
+        directions = ('->','<-'),
+        adjustment_set : FrozenSet[Variable] = None):
+
+        adjustment_set = adjustment_set or frozenset()
+        
+        paths_to_grow = sorted(paths)
+
+        while len(paths_to_grow) > 0:
+            path = paths_to_grow.pop()
+            tip = path[-1]
+            if '->' in directions:
+                for child in self.children({ tip }):
+                    if child in path:
+                        continue
+                    path_ = path.grow(child, '->')                  
+                    if child in destination_set:
+                        completed_paths.add(path_)
+                    elif path_ not in paths:
+                        paths.add(path_)
+            if '<-' in directions:
+                for parent in self.parents({ tip }):
+                    if parent in path:
+                        continue
+                    path_ = path.grow(parent, '<-')                  
+                    if parent in destination_set:
+                        completed_paths.add(path_)
+                    elif path_ not in paths:
+                        paths.add(path_)

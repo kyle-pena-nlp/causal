@@ -112,6 +112,10 @@ def _gen_blocker_sets(paths, graph : Graph, latents : FrozenSet[Variable], X : V
             yield frozenset(adjustment_set)    
 
 def statement_identifiable(statement : Union[str,P], graph : Union[Graph,str]) -> Derivation:
+    """
+        Is a statement identifiable using simply the 3 forward rules of do-calculus
+        (No inverse of the rules, no marginalization tricks, etc.)
+    """
     statement = maybe_parse(P, statement)
     graph     = maybe_parse(Graph, graph)
     _assert_statement_compatible_with_graph(statement, graph)

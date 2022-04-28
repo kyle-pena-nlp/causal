@@ -1,26 +1,23 @@
 from dataclasses import dataclass, field
-from typing import FrozenSet, Union, Tuple, Dict, Union, Iterable, List, Optional
+from itertools import product
+from typing import FrozenSet, Union, Tuple, Dict, Union, Iterable, List, Optional, Set
 from collections import Counter, defaultdict
 import re
 from p import P, Variable, Product, Quotient
-from p import P
+from path import Path
 from structural_equation import StructuralEquation
-from util import maybe_parse, maybe_parse_frozenset
-
+from argparse import ArgumentParser
+from parseable import Parseable
 
 @dataclass(frozen = True, eq = True)
 class Graph:
 
+    # All variables in the structural equations must appear in this list
     variables : FrozenSet[Variable]
-
-    # name of Y => eq :: Y = f(X1,X2,...)
     structural_equations : FrozenSet[StructuralEquation]
 
-    #def __post_init__(self):
-    #    self.variables = _ensure_is_frozen_set(self.variables)
-    #    self.structural_equations = _ensure_is_frozen_set(self.structural_equations)
+    # todo: non-persistent, cached representation of parent/child relationships for efficiency's sake
 
-    # TODO: replace with EBNF based parser
     @staticmethod
     def parse(g : str):
 
@@ -45,7 +42,7 @@ class Graph:
                 list_of_variables = token
                 for variable in list_of_variables.split(","):
                     variables.add(Variable(variable.strip()))
-
+        
         structural_equations = set()
         for variable in variables:
             if variable in parents:
@@ -57,7 +54,258 @@ class Graph:
         valid,err = self.validate()
         if not valid:
             raise Exception(err)
+
+    def validate(self):
+        """
+            Make sure graph implied by structural equations meets assumptions
+        """
+
+        valid,err = self._unique_outcomes()
+        if not valid:
+            return False,err
+
+        valid,err = self._all_variables_declared()
+        if not valid:
+            return False,err
+
+        valid,err = self._acyclic()
+        if not valid:
+            return False,err
+
+        return True,None
+
+    def joint_distribution(self):
+        terms = set()
+        for variable in self.variables:
+            parents = self.parents({ variable })
+            term = P(Y = frozenset({variable}), do = frozenset({}), Z = parents)
+            terms.add(term)
+        return Product(frozenset(terms))
+
+    def conditionally_independent(self, Y , Z, W = None):
+        if W is None:
+            W = frozenset()
+        complete_paths = set()
+        paths = { Path(path = (y,), arrows = (None,)) for y in Y }
+        while len(paths) > 0:
+            self._grow_paths(destination_set = Z, paths = paths, completed_paths = complete_paths, directions = ('<-','->'), adjustment_set=W)
+            if len(complete_paths) > 0:
+                return False
+        return True
     
+    # GRAPH MUTILATION OPERATION
+    def orphan(self, X : FrozenSet[Variable]) -> 'Graph':
+        # Remove arrows pointing into X
+        truncated_structural_equations = set()
+        for structural_equation in self.structural_equations:
+            if structural_equation.Y in X:
+                pass
+            else:
+                truncated_structural_equations.add(structural_equation)
+        return Graph(self.variables, truncated_structural_equations)
+
+    # GRAPH MUTILATION OPERATION
+    def bereave(self, X : FrozenSet[Variable]) -> 'Graph':
+        # Remove arrows pointing out of X
+        modified_structural_equations = set()
+        for structural_equation in self.structural_equations:
+            if structural_equation.X & X:
+                structural_equation = StructuralEquation(X = structural_equation.X - X, Y = structural_equation.Y)
+            modified_structural_equations.add(structural_equation)
+        return Graph(self.variables, modified_structural_equations)
+
+    # GRAPH RELATIONSHIP OPERATION
+    def parents(self, X : Iterable[Variable]) -> FrozenSet[Variable]:
+        parents = set()
+        for x in X:
+            for eq in self.structural_equations:
+                if eq.Y == x:
+                    for x_ in eq.X:
+                        parents.add(x_)
+        return frozenset(parents)
+
+    # GRAPH RELATIONSHIP OPERATION
+    def children(self, X : Iterable[Variable]) -> FrozenSet[Variable]:
+        children = set()
+        for x in X:
+            for eq in self.structural_equations:
+                if x in eq.X:
+                    children.add(eq.Y)
+        return frozenset(children)
+
+    # GRAPH RELATIONSHIP OPERATION
+    def ancestors(self, X : FrozenSet[Variable]) -> FrozenSet[Variable]:
+        # TODO: replace with repeated calls to _grow_paths?
+        parents = set()
+        queue = list(self.parents(X))
+        visited = set()
+        while len(queue) > 0:
+            x = queue.pop()
+            parents.add(x)
+            visited.add(x)
+            for parent in self.parents({ x }):
+                if parent not in visited:
+                    queue.append(parent)
+        return parents
+
+    # GRAPH RELATIONSHIP OPERATION
+    def descendants(self, X : FrozenSet[Variable]) -> FrozenSet[Variable]:
+        # TODO: replace with repeated calls to _grow_paths?        
+        children = set()
+        queue = list(self.children(X))
+        visited = set()
+        while len(queue) > 0:
+            x = queue.pop()
+            children.add(x)
+            visited.add(x)
+            for child in self.children({ x }):
+                if child not in visited:
+                    queue.append(child)
+        return children
+
+    def _gen_blocker_sets(self, paths : FrozenSet[Path], current_adjustment_set : FrozenSet[Variable], latents : FrozenSet[Variable]):
+        """
+            Find all sets of blockers that block all paths, given a current (possibly empty) adjustment set and a set of unobservable latents
+        """
+        
+        # Find the set of blocking variables in each path
+        blockers_per_path = [ list(path.path_blockers(current_adjustment_set = current_adjustment_set, latents = latents)) for path in paths ]
+        
+        # Order each set in terms of how common that variable appears in all blocking sets
+        most_common_blockers = [ blocker for (blocker,count) in Counter([ path_blocker for path_blockers in blockers_per_path for path_blocker in path_blockers ]).most_common() ]
+        for path_blockers in blockers_per_path:
+            path_blockers.sort(key = lambda blocker: most_common_blockers.index(blocker))
+
+        # Yield unique generated blocker sets.
+        # The ordering as imposed above will tend to yield the most economical blocker sets first
+        blocker_sets_so_far = set()
+        for blocker_set in product(*blockers_per_path):
+            # Test for sufficiency
+            if not all(path.path_is_blocked(blockers = blocker_set) for path in paths):
+                continue
+            blocker_set = frozenset(blocker_set)
+            if blocker_set not in blocker_sets_so_far:
+                blocker_sets_so_far.add(blocker_set)
+                yield blocker_set
+
+    def gen_sufficient_backdoor_adjustment_sets(self, X: FrozenSet[Variable], Y : FrozenSet[Variable], latents : Optional[FrozenSet[Variable]]) -> \
+        Iterable[FrozenSet[Variable]]:
+        latents = latents or frozenset()
+        backdoor_paths = self.backdoor_paths(X, Y)
+        for blocker_set in self._gen_blocker_sets(paths = backdoor_paths, current_adjustment_set = frozenset(), latents = latents):
+            yield blocker_set
+
+    def gen_sufficient_mediation_set(self, X : FrozenSet[Variable], Y: FrozenSet[Variable], latents : Optional[FrozenSet[Variable]]) -> \
+        Iterable[FrozenSet[Variable]]:
+        latents = latents or frozenset()
+        causal_paths = self.causal_paths(X,Y)
+        for blocker_set in self._gen_blocker_sets(paths = causal_paths, current_adjustment_set=frozenset(), latents = latents):
+            yield blocker_set
+
+    def paths(self, X : FrozenSet[Variable], Y : FrozenSet[Variable], W : Optional[FrozenSet[Variable]] = None) -> FrozenSet[Path]:
+        W = W or frozenset()
+        paths = { Path(path = (x,), arrows = (None,)) for x in X }
+        completed_paths = set()
+        while len(paths) > 0:
+            self._grow_paths(Y, paths, completed_paths, directions = ('->','<-'), adjustment_set = W)
+        return frozenset(completed_paths)
+
+    def causal_paths(self, X : FrozenSet[Variable], Y: FrozenSet[Variable], W: Optional[FrozenSet[Variable]] = None) -> FrozenSet[Path]:
+        W = W or frozenset()
+        paths = { Path(path = (x,), arrows = (None,)) for x in X } 
+        completed_paths = set()
+        while len(paths) > 0:
+            self._grow_paths(Y, paths, completed_paths, directions = ('->',), adjustment_set = W)
+        return frozenset(completed_paths)
+
+    def backdoor_paths(self, X: FrozenSet[Variable], Y: FrozenSet[Variable], W: Optional[FrozenSet[Variable]] = None) -> FrozenSet[Path]:
+        W = W or None
+        paths = { Path(path = (x,), arrows = (None,)) for x in X }
+        completed_paths = set()
+        self._grow_paths(Y, paths, completed_paths, directions = ('<-',))
+        while len(paths) > 0:
+            self._grow_paths(Y, paths, completed_paths, directions = ('<-','->'), adjustment_set = W)
+        return frozenset(completed_paths)
+
+    def _grow_paths(self, 
+        destination_set : FrozenSet[Variable], 
+        paths : Set[Path], 
+        completed_paths : Set[Path],
+        directions = ('->','<-'),
+        adjustment_set : FrozenSet[Variable] = None):
+
+        """
+            Grow a path (in any specified direction) until it either:
+                1) Encounters d-separation
+                2) Reaches the destination set
+
+            When a path reaches a destination set, add it to the completed_paths
+
+            This method is a workhorse.  For example, we can get all causal descendants
+            by repeatedly calling _grow_paths with directions = ('->',) and an empty adjustment set.
+        """
+
+        adjustment_set = adjustment_set or frozenset()
+        
+        new_paths = set()
+
+        # This work loop would be a good target for parallelism, should it be needed
+        while len(paths) > 0:
+
+            path = paths.pop()
+            last_variable = path.path[-1]
+            last_arrow    = path.arrows[-1]
+            
+            if '->' in directions:
+            
+                for child in self.children({ last_variable }):
+                    
+                    # Paths cannot self-intersect
+                    if child in path.path:
+                        continue
+
+                    # Do not continue if there is d-separation
+                    blocked = last_variable in adjustment_set
+                    if Path._d_separated_triple((last_arrow, '->'), blocked):
+                        continue
+
+                    # Grow the path to include the child
+                    path_ = path.grow(child, '->') 
+
+
+                    # If this path reaches the destination set, add it to the completed paths          
+                    if child in destination_set:
+                        completed_paths.add(path_)
+                    
+                    # Otherwise, enqueue this branch
+                    elif path_ not in paths:
+                        new_paths.add(path_)
+                    
+            if '<-' in directions:
+                for parent in self.parents({ last_variable }):
+
+                    # Paths cannot self-intersect
+                    if parent in path.path:
+                        continue
+
+                    # Check for d-separation
+                    blocked = last_variable in adjustment_set
+                    if Path._d_separated_triple((last_arrow, '<-'), blocked):
+                        continue
+                    
+                    # Grow the path to include the parent
+                    path_ = path.grow(parent, '<-')      
+
+                    # If this path reaches the destination set, add it to the completed paths            
+                    if parent in destination_set:
+                        completed_paths.add(path_)
+
+                    # Otherwise, enqueue this branch
+                    elif path_ not in paths:
+                        new_paths.add(path_)
+    
+        paths |= new_paths
+
     def _all_variables_declared(self):
         """
             Validation: No variables appear in graph that are undeclared
@@ -104,280 +352,6 @@ class Graph:
                     queue.append(child)
         return False
 
-    def validate(self):
-        """
-            Make sure graph implied by structural equations meets assumptions
-        """
-
-        valid,err = self._unique_outcomes()
-        if not valid:
-            return False,err
-
-        valid,err = self._all_variables_declared()
-        if not valid:
-            return False,err
-
-        valid,err = self._acyclic()
-        if not valid:
-            return False,err
-
-        return True,None
-
-    def joint_distribution(self):
-        terms = set()
-        for variable in self.variables:
-            parents = self.parents({ variable })
-            term = P(Y = frozenset({variable}), do = frozenset({}), Z = parents)
-            terms.add(term)
-        return Product(frozenset(terms))
-
-    def conditional_distribution(self, Z: FrozenSet[Variable]):
-        joint_distribution = self.joint_distribution()
-        denominator_terms = { P(Y = z, do = frozenset({}), Z = frozenset({})) for z in Z }
-        eliminated_terms = joint_distribution.terms & denominator_terms
-        raise Exception("ConditionalProbability class?")
-        #return ConditionalProbability(numerator = joint_distribution.terms - eliminated_terms, denominator = denominator_terms - eliminated_terms)
-
-    def conditionally_independent(self, Y , Z, W = None):
-        
-        if W is None:
-            W = frozenset()
-        return self._conditionally_independent(maybe_parse_frozenset(Variable,Y), maybe_parse_frozenset(Variable,Z), maybe_parse_frozenset(Variable,W))
-
-    def _conditionally_independent(self, Y : FrozenSet[Variable], Z : FrozenSet[Variable], W : FrozenSet[Variable] = None):
-        return not (Z & self._reachable_from(Y, W))
-    
-    def reachable_from(self, X, W = None):
-        if W is None:
-            W = frozenset()
-        return self._reachable_from(maybe_parse_frozenset(Variable,X), maybe_parse_frozenset(Variable,W))
-
-    def _reachable_from(self, X : FrozenSet[Variable], W : FrozenSet[Variable]):
-
-        """
-            Apply the d-separability critera to determine what nodes are reachable from X
-        """
-        reachable = set()
-        for x in X:
-            # TODO: should I include self?
-            self._reachable_from_rec(x, W, [ x ], [ None ], reachable)
-        return reachable
-
-    def _reachable_from_rec(self, x : Variable, W: FrozenSet[Variable], path : List[Variable], path_arrows : List[str], reachable : set()):
-        
-        for p in self.parents({ x }):
-            
-            # Paths cannot self-intersect
-            if p in path:
-                continue
-            
-            this_arrow = '<-'
-            last_arrow = path_arrows[-1]
-            last_variable = path[-1]
-            arrows = (last_arrow,this_arrow)
-            blocked = last_variable in W or (self.descendants({ last_variable }) & W)
-
-            if not Graph._d_separated_triple(arrows,blocked):
-                reachable.add(p)
-                self._reachable_from_rec(p, W, path + [p], path_arrows + [this_arrow], reachable)
-
-        for c in self.children({ x }):
-
-            # Paths cannot self-intersect
-            if c in path:
-                continue
-            
-            this_arrow = '->'
-            last_arrow = path_arrows[-1]
-            last_variable = path[-1]            
-            arrows = (last_arrow,this_arrow)
-            blocked = last_variable in W or (self.descendants({ last_variable }) & W)
-
-            if not Graph._d_separated_triple(arrows,blocked):
-                reachable.add(c)
-                self._reachable_from_rec(c, W, path + [c], path_arrows + [this_arrow], reachable)
-                
-    def paths(self, X : Variable, Y: Variable, search_directions = ('->','<-')):
-        """
-            Generate all paths from X to Y, irrespective of blocking, direction, etc.
-        """
-        paths, arrow_paths = [], []
-        path_so_far, path_arrows_so_far = [X], [None]        
-
-        self._paths_rec(Y, path_so_far, path_arrows_so_far, paths, arrow_paths, search_directions)
-        return paths, arrow_paths
-
-    def _paths_rec(self, 
-            Y : Variable, 
-            path_so_far : List[Variable], path_arrows_so_far : List[str], 
-            paths : List[Tuple[Variable]], arrow_paths: List[Tuple[str]],
-            search_directions) -> \
-        Tuple[List[Tuple[Variable]],List[Tuple[Optional[str]]]]:
-        
-        tip = path_so_far[-1]
-        
-        if '<-' in search_directions:
-            for x in self.parents(frozenset({ tip })):
-                if x in path_so_far:
-                    continue
-                elif x == Y:
-                    paths.append(tuple(path_so_far + [Y]))
-                    arrow_paths.append(tuple(path_arrows_so_far + ['<-']))
-                else:
-                    self._paths_rec(Y, path_so_far + [x], path_arrows_so_far + ['<-'], paths, arrow_paths, search_directions)
-        
-        if '->' in search_directions:
-            for x in self.children(frozenset({ tip })):
-                if x in path_so_far:
-                    continue
-                elif x == Y:
-                    paths.append(tuple(path_so_far + [Y]))
-                    arrow_paths.append(tuple(path_arrows_so_far + ['->']))
-                else:
-                    self._paths_rec(Y, path_so_far + [x], path_arrows_so_far + ['->'], paths, arrow_paths, search_directions)
-
-    def backdoor_paths(self, X : Variable, Y: Variable) -> FrozenSet[Tuple[Variable]]:
-        """
-            Generate all backdoor paths from X to Y, irrespective of blocking, direction, etc.
-        """
-        paths, arrow_paths = [], []
-        path_so_far, path_arrows_so_far = [X], [None]  
-
-        for x in self.parents(frozenset({ X })):
-            if x in path_so_far:
-                continue
-            elif x == Y:
-                paths.append(tuple(path_so_far + [Y]))
-                arrow_paths.append(tuple(path_arrows_so_far + ['<-']))
-            else:
-                self._paths_rec(Y, path_so_far + [x], path_arrows_so_far + ['<-'], paths, arrow_paths, ('<-','->'))
-
-        return list(zip(paths, arrow_paths))
-
-    def causal_paths(self, X : Variable, Y : Variable):
-        """
-            Generate all causal paths from X to Y, irrespective of blocking, direction, etc.
-        """
-        return self.paths(X, Y, '->')
-
-    def path_is_blocked(self, path : Tuple[Variable], path_arrows : Tuple[Optional[str]], blockers : FrozenSet[Variable]):
-        last_variable,last_arrow = None,None
-        for variable,arrow in zip(path,path_arrows):
-            if last_variable is not None:
-                variable_blocked = last_variable in blockers
-                d_separated_triple = Graph._d_separated_triple((last_arrow,arrow), variable_blocked)
-                if d_separated_triple:
-                    return True
-            last_variable,last_arrow = variable,arrow
-        return False
-
-    def path_blockers(self, path):
-        path_blockers = set()
-        path_variables,path_arrows = path
-        # TODO: exclude start and end
-        for variable in path_variables:
-            if self.path_is_blocked(path_variables, path_arrows, frozenset({ variable })):
-                path_blockers.add(variable)
-        return path_blockers
-        
-    @staticmethod
-    def _d_separated_triple(arrows : Tuple[Union[str,None],str], blocked : bool):
-        a1,a2 = arrows
-        if a1 is None:
-            return False
-        elif a1 == '->' and a2 == '->' and not blocked:
-            return False
-        elif a1 == '->' and a2 == '->' and blocked:
-            return True
-        elif a1 == '->' and a2 == '<-' and not blocked:
-            return True
-        elif a1 == '->' and a2 == '<-' and blocked:
-            return False
-        elif a1 == '<-' and a2 == '->' and not blocked:
-            return False
-        elif a1 == '<-' and a2 == '->' and blocked:
-            return True
-        elif a1 == '<-' and a2 == '<-' and not blocked:
-            return False
-        elif a1 == '<-' and a2 == '<-' and blocked:
-            return True
-        else:
-            raise Exception("Programmer Error - unrecognized triple: A{}B(blocked={}){}C".format(a1,blocked,a2))
-
-
-    # GRAPH MUTILATION OPERATION
-    def orphan(self, X : FrozenSet[Variable]) -> 'Graph':
-        # Remove arrows pointing into X(s)
-        truncated_structural_equations = set()
-        for structural_equation in self.structural_equations:
-            if structural_equation.Y in X:
-                pass
-            else:
-                truncated_structural_equations.add(structural_equation)
-        return Graph(self.variables, truncated_structural_equations)
-
-    # GRAPH MUTILATION OPERATION
-    def bereave(self, X : FrozenSet[Variable]) -> 'Graph':
-        # Remove arrows pointing out of X(s)
-        modified_structural_equations = set()
-        for structural_equation in self.structural_equations:
-            if structural_equation.X & X:
-                structural_equation = StructuralEquation(X = structural_equation.X - X, Y = structural_equation.Y)
-            modified_structural_equations.add(structural_equation)
-        return Graph(self.variables, modified_structural_equations)
-
-    # GRAPH RELATIONSHIP OPERATION
-    def ancestors(self, X : FrozenSet[Variable]) -> FrozenSet[Variable]:
-        parents = set()
-        queue = list(self.parents(X))
-        visited = set()
-        while len(queue) > 0:
-            x = queue.pop()
-            parents.add(x)
-            visited.add(x)
-            for parent in self.parents({ x }):
-                if parent not in visited:
-                    queue.append(parent)
-        return parents
-
-    # GRAPH RELATIONSHIP OPERATION
-    def parents(self, X : FrozenSet[Variable]) -> FrozenSet[Variable]:
-        parents = set()
-        for x in X:
-            for eq in self.structural_equations:
-                if eq.Y == x:
-                    for x_ in eq.X:
-                        parents.add(x_)
-        return frozenset(parents)
-
-    # GRAPH RELATIONSHIP OPERATION
-    def children(self, X : FrozenSet[Variable]) -> FrozenSet[Variable]:
-        children = set()
-        for x in X:
-            for eq in self.structural_equations:
-                if x in eq.X:
-                    children.add(eq.Y)
-        return frozenset(children)
-
-    def neighbors(self, X : FrozenSet[Variable]) -> FrozenSet[Variable]:
-        # No spouses, even though that abuses the metaphor a bit
-        return self.parents(X) | self.children(X)
-
-    # GRAPH RELATIONSHIP OPERATION
-    def descendants(self, X : FrozenSet[Variable]) -> FrozenSet[Variable]:
-        children = set()
-        queue = list(self.children(X))
-        visited = set()
-        while len(queue) > 0:
-            x = queue.pop()
-            children.add(x)
-            visited.add(x)
-            for child in self.children({ x }):
-                if child not in visited:
-                    queue.append(child)
-        return children
-
-
     def __str__(self):
         struct_eq_variables = set()
         for eq in self.structural_equations:
@@ -392,5 +366,52 @@ class Graph:
 
 
 if __name__ == "__main__":
-    g = Graph.parse("X->Y;Y<-Z")
-    g.reachable_from({ Variable("Z") }, set())
+    
+    parser = ArgumentParser()
+    parser.add_argument("--graph", type = str, required = False, default = "Q->X;X->Y;Q->R;Q->S;R->Y;S->Y")
+    parser.add_argument("--treatment", type = str, required = False, default = "X")
+    parser.add_argument("--exposure", type = str, required = False, default = "Y")
+    parser.add_argument("--latents", type = str, required = False, default = "")
+    parser.add_argument("--adjustment_set", type = str, required = False, default = "")
+    parser.add_argument("--method", type = str, required = False, default = "backdoor_adjustment_sets")
+    args = parser.parse_args()
+
+    g : Graph = Graph.parse(args.graph)
+    X : FrozenSet[Variable] = Parseable.parse_list(Variable, args.treatment)
+    Y : FrozenSet[Variable] = Parseable.parse_list(Variable, args.exposure)
+    W : FrozenSet[Variable] = Parseable.parse_list(Variable, args.adjustment_set)
+    latents : FrozenSet[Variable] = Parseable.parse_list(Variable, args.latents)
+    method = args.method
+    
+    def _print_things(things):
+        print(", ".join(map(str,things)))
+
+    #for path in g.paths(X,Y):
+    #    print(path)
+    if method == "parents":
+        _print_things(g.parents(X))
+    elif method == "ancestors":
+        _print_things(g.ancestors(X))
+    elif method == "children":
+        _print_things(g.children(X))
+    elif method == "descendants":
+        _print_things(g.descendants(X))
+    elif method == "paths":
+        _print_things(g.paths(X, Y, W))
+    elif method == "causal_paths":
+        _print_things(g.causal_paths(X,Y,W))
+    elif method == "backdoor_paths":
+        _print_things(g.backdoor_paths(X,Y,W))
+    elif method == "joint_distribution":
+        print(g.joint_distribution())
+    elif method == "conditionally_independent":
+        print(g.conditionally_independent(X, Y, W))
+    elif method == "backdoor_adjustment_sets":
+        for backdoor_adjustment_set in g.gen_sufficient_backdoor_adjustment_sets(X, Y, latents = latents):
+            _print_things(backdoor_adjustment_set)
+    elif method == "causal_mediation_sets":
+        for causal_mediation_set in g.gen_sufficient_mediation_set(X, Y, latents = latents):
+            _print_things(causal_mediation_set)
+    elif method == "adjustment_sets":
+        for adjustment_set in g.gen_adjustment_sets(X, Y, latents = latents):
+            _print_things(adjustment_set)
