@@ -1,5 +1,5 @@
 from dataclasses import dataclass
-from typing import Tuple, FrozenSet, Union
+from typing import Tuple, FrozenSet, Union, Optional
 from p import Variable
 
 @dataclass(frozen = True, eq = True)
@@ -21,7 +21,7 @@ class Path:
             last_variable,last_arrow = variable,arrow
         return False
 
-    def path_blockers(self, current_adjustment_set : FrozenSet[Variable] = None, latents : FrozenSet[Variable] = None):
+    def path_blockers(self, current_adjustment_set : Optional[FrozenSet[Variable]] = None, latents : Optional[FrozenSet[Variable]] = None):
         """
             The set of variables for which the path is blocked, given the current_adjustment_set
             Not all variables given will be *necessary* to block the path, especially if the current_adjustment_set
@@ -31,7 +31,7 @@ class Path:
         latents = latents or frozenset()
 
         path_blockers = set()
-        path_variables,path_arrows = self.path, self.arrows
+        path_variables = self.path
 
         for i,variable in enumerate(path_variables):
             if i == 0 or i == (len(path_variables) - 1):
@@ -40,6 +40,7 @@ class Path:
                 continue
             if self.path_is_blocked(blockers = current_adjustment_set | frozenset({ variable })):
                 path_blockers.add(variable)
+        
         return frozenset(path_blockers)
         
     @staticmethod

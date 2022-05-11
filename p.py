@@ -73,6 +73,9 @@ class P(Expression):
     def hat_free(self):
         return len(self.do) == 0            
 
+    def condition_on(self, Z : FrozenSet[Variable]):
+        return P(Y = self.Y, do = self.do, Z = self.Z | Z)
+
 
 @grammar_register_tag("quotient")
 @dataclass(frozen = True, eq = True)
