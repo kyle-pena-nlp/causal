@@ -3,12 +3,23 @@ from typing import Tuple, FrozenSet, Union, Optional
 from p import Variable
 
 @dataclass(frozen = True, eq = True)
+class PathEntry:
+    variable : Variable
+    arrow : str
+
+@dataclass(frozen = True, eq = True)
 class Path:
     path : Tuple[Variable]
     arrows : Tuple[str]
 
     def grow(self, variable : Variable, arrow : str):
         return Path( (*self.path, variable), (*self.arrows, arrow))
+
+    def tip(self):
+        return PathEntry(self.path[-1], self.arrows[-1])
+
+    def head(self):
+        return PathEntry(self.path[0], self.arrows[0])
 
     def path_is_blocked(self, blockers : FrozenSet[Variable]):
         last_variable,last_arrow = None,None
@@ -66,6 +77,9 @@ class Path:
             return True
         else:
             raise Exception("Programmer Error - unrecognized triple: A{}B(blocked={}){}C".format(a1,blocked,a2))
+
+    def __len__(self):
+        return len(self.path)
 
     def __str__(self):
         string = []

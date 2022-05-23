@@ -152,12 +152,15 @@ class Graph:
         """
 
     # GRAPH RELATIONSHIP OPERATION
-    def ancestors(self, X : Iterable[Variable]) -> FrozenSet[Variable]:
+    def ancestors(self, X : Iterable[Variable], include_self = False) -> FrozenSet[Variable]:
         # TODO: replace with repeated calls to _grow_paths?
         ancestors_ = set()
         for x in X:
             ancestors_ |= self._ancestors[x]
-        return frozenset(ancestors_)
+        if include_self:
+            return frozenset(ancestors_ | set(X))
+        else:
+            return frozenset(ancestors_)
         """
         parents = set()
         queue = list(self.parents(X))
@@ -216,10 +219,45 @@ class Graph:
 
         return Graph(variables=Y, structural_equations=structural_equations)
 
+    def bidirected_edge_preserving_sub_graph(self, Y: FrozenSet[Variable], latents : FrozenSet[Variable]):
+        """
+            Forms a sub-graph including all y in Y, but preserves latents which form bidirected edges between any A and B in Y
+        """
+        
+        bow_arcs = self.find_bow_arcs(Y, latents)
+
+        preserved_bow_arcs = { bow_arc for bow_arc in bow_arcs if bow_arc.head().variable in Y and bow_arc.tip().variable in Y }
+
+        preserved_latent_variables = set.union(*[ set(bow_arc.path) & latents for bow_arc in preserved_bow_arcs  ])
+
+        return self.sub_graph(Y | preserved_latent_variables)
+
+
+    def find_bow_arcs(self, Y : Iterable[Variable], latents: FrozenSet[Variable]):
+        
+        observable_variables = self.variables - latents
+        paths = { Path(path = (x,), arrows = (None,)) for x in Y }
+        completed_paths = set()
+
+        self._grow_paths(destination_set = observable_variables, 
+            paths = paths, 
+            completed_paths = completed_paths,
+            directions = ('<-',))
+
+        while len(paths) > 0:
+            self._grow_paths(destination_set = observable_variables,
+                paths = paths,
+                completed_paths = completed_paths,
+                directions = ('<-','->'))        
+
+        bow_arcs = { path for path in completed_paths if len(path) > 2 }
+
+        return bow_arcs
+
     # Per Shpister, Pearl 2006
-    def maximal_C_components(self, latents : FrozenSet[Variable]):
-        C_components = {}
-        variables = set(self.variables)
+    def maximal_C_components(self, latents : FrozenSet[Variable]) -> FrozenSet[FrozenSet[Variable]]:
+        C_components = set()
+        variables = set(self.variables) - latents
         # Algorithm:
         """
             Pick an arbitrary variable, make it a C-component
@@ -235,26 +273,31 @@ class Graph:
                     C_component |= growth_set
                     variables -= growth_set
                 else:
-                    C_components.add(C_component)
+                    C_components.add(frozenset(C_component))
                     break
         return frozenset(C_components)
 
     def bidirected_edge_neighbors(self, C_component : Set[Variable], latents : FrozenSet[Variable]):
-        results = {}
-        for variable in C_component:
-            latent_parents = latents & self.parents[variable]
-            for latent_parent in latent_parents:
-                for parent_latent_parent in self.parents[latent_parent]:
-                    results.add(parent_latent_parent)
-                for child_latent_parent in self.children[latent_parent]:
-                    results.add(child_latent_parent)
-            latent_children = latents & self.children[variable]
-            for latent_child in latent_children:
-                for parent_latent_child in self.parents[latent_child]:
-                    results.add(parent_latent_child)
-                for child_latent_child in self.children[latent_child]:
-                    results.add(child_latent_child)
-        return frozenset((results - C_component) - latents)
+        """
+            Bow patterns (aka confounding arcs aka bidirected paths) are:
+
+            Pearl 1995: "A confounding arc represents the existence in the diagram of a backdoor path 
+            that contains only unobserved variables and has no converging arrows"
+
+            So, I use the _grow_paths method to find backdoor paths, with the destination set
+            consisting of all observed nodes
+
+            This means that any completed path discovered by _grow_paths must terminate in an observed variable
+            and consist of only unobserved variables, as desired.
+
+            The 'converging arrows' condition is handled by the fact that we are not conditioning
+            on any variables and self._grow_paths respects d-separation
+        """
+        bow_arcs = self.find_bow_arcs(C_component, latents)
+
+        bow_arc_neighbors = { path.tip().variable for path in bow_arcs }
+        
+        return frozenset((bow_arc_neighbors - C_component))
 
     def _gen_blocker_sets(self, paths : FrozenSet[Path], current_adjustment_set : FrozenSet[Variable], latents : FrozenSet[Variable]):
         """
@@ -405,9 +448,6 @@ class Graph:
                 2) Reaches the destination set
 
             When a path reaches a destination set, add it to the completed_paths
-
-            This method is a workhorse.  For example, we can get all causal descendants
-            by repeatedly calling _grow_paths with directions = ('->',) and an empty adjustment set.
         """
 
         adjustment_set = adjustment_set or frozenset()
@@ -570,19 +610,19 @@ class Graph:
 if __name__ == "__main__":
     
     parser = ArgumentParser()
-    parser.add_argument("--graph", type = str, required = False, default = "Q->X;X->Y;Q->R;Q->S;R->Y;S->Y;W")
+    parser.add_argument("--graph", type = str, required = False, default = "X->Z;Z->Y;U1->X;U1->Y;U2A->Z;U2A->U2B;U2C->U2B;U2C->Y")
     parser.add_argument("--treatment", type = str, required = False, default = "X,Y,Q,W")
     parser.add_argument("--exposure", type = str, required = False, default = "Y")
-    parser.add_argument("--latents", type = str, required = False, default = "")
+    parser.add_argument("--latents", type = str, required = False, default = "U1,U2A,U2B,U2C")
     parser.add_argument("--adjustment_set", type = str, required = False, default = "")
-    parser.add_argument("--method", type = str, required = False, default = "admissible_orderings")
+    parser.add_argument("--method", type = str, required = False, default = "maximal_c_components")
     args = parser.parse_args()
 
     g : Graph = Graph.parse(args.graph)
     X : FrozenSet[Variable] = Parseable.parse_list(Variable, args.treatment)
     Y : FrozenSet[Variable] = Parseable.parse_list(Variable, args.exposure)
     W : FrozenSet[Variable] = Parseable.parse_list(Variable, args.adjustment_set)
-    latents : FrozenSet[Variable] = Parseable.parse_list(Variable, args.latents)
+    latents : FrozenSet[Variable] = frozenset(Parseable.parse_list(Variable, args.latents))
     method = args.method
     
     def _print_things(things):
@@ -620,3 +660,6 @@ if __name__ == "__main__":
     elif method == "admissible_orderings":
         for admissible_ordering in g.gen_admissible_orderings(X):
             _print_things(admissible_ordering)
+    elif method == "maximal_c_components":
+        for c_component in g.maximal_C_components(latents = latents):
+            _print_things(c_component)

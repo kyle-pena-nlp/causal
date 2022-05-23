@@ -24,7 +24,7 @@ MARGINALIZATION_EXPRESSION = expression:EXPRESSION ;
 MARGINALIZATION_MARGINS = margins:VARIABLE_LIST ;
 VARIABLE_LIST = ( VARIABLE { ',' WS VARIABLE }* );
 VARIABLE = variable:( NAME ) ;
-NAME = name:/[A-Z]+/ ;
+NAME = name:/[A-Z][A-Z0-9]*/ ;
 P = p:( 'P(' WS P_INNER WS ')' );
 P_INNER = (Y_RULE '|' DO_RULE ',' Z_RULE) |
           (Y_RULE '|' Z_RULE ) |
