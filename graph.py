@@ -610,12 +610,12 @@ class Graph:
 if __name__ == "__main__":
     
     parser = ArgumentParser()
-    parser.add_argument("--graph", type = str, required = False, default = "X->Z;Z->Y;U1->X;U1->Y;U2A->Z;U2A->U2B;U2C->U2B;U2C->Y")
-    parser.add_argument("--treatment", type = str, required = False, default = "X,Y,Q,W")
+    parser.add_argument("--graph", type = str, required = False, default = "U->Y;U->X;X->Y")
+    parser.add_argument("--treatment", type = str, required = False, default = "X")
     parser.add_argument("--exposure", type = str, required = False, default = "Y")
-    parser.add_argument("--latents", type = str, required = False, default = "U1,U2A,U2B,U2C")
+    parser.add_argument("--latents", type = str, required = False, default = "")
     parser.add_argument("--adjustment_set", type = str, required = False, default = "")
-    parser.add_argument("--method", type = str, required = False, default = "maximal_c_components")
+    parser.add_argument("--method", type = str, required = False, default = "backdoor_adjustment_sets")
     args = parser.parse_args()
 
     g : Graph = Graph.parse(args.graph)
